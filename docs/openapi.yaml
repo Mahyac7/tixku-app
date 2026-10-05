@@ -1,0 +1,761 @@
+openapi: 3.0.3
+info:
+  title: Tixku API
+  version: 1.0.0
+  description: >
+    REST API untuk Tixku — platform pemesanan tiket film & event.
+    Kontrak ini memodelkan microservices dari system design BookMyShow:
+    Auth, Search, Movie, Theatre, Show, Booking, dan Payment Service,
+    semuanya diakses melalui satu API Gateway.
+  contact:
+    name: Tixku Backend
+servers:
+  - url: https://api.tixku.app/v1
+    description: Production
+  - url: http://10.0.2.2:8080/v1
+    description: Local (Android emulator -> host machine)
+
+tags:
+  - name: Auth
+    description: Autentikasi pengguna (OAuth/JWT) — Auth Service
+  - name: Cities
+    description: Daftar kota yang didukung
+  - name: Search
+    description: Pencarian film/event — Search Service (Elasticsearch)
+  - name: Movies
+    description: Metadata film — Movie Service
+  - name: Shows
+    description: Jadwal tayang & bioskop — Theatre + Show Service
+  - name: Bookings
+    description: Seat locking & pemesanan — Booking Service
+  - name: Payments
+    description: Pembayaran — Payment Service
+
+paths:
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Login dan dapatkan access token (JWT)
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login berhasil
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Daftar akun baru
+      operationId: register
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Akun dibuat
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /cities:
+    get:
+      tags: [Cities]
+      summary: Daftar kota yang tersedia
+      operationId: listCities
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/City'
+
+  /search/movies:
+    get:
+      tags: [Search]
+      summary: Cari film di sebuah kota
+      description: >
+        Mengembalikan film yang sedang tayang di kota tertentu, dengan filter
+        opsional berdasarkan kata kunci (judul/genre/bahasa). Didukung oleh
+        Search Service (Elasticsearch).
+      operationId: searchMovies
+      security: []
+      parameters:
+        - name: cityId
+          in: query
+          required: true
+          schema:
+            type: string
+          example: jkt
+        - name: q
+          in: query
+          required: false
+          description: Kata kunci pencarian (judul, genre, atau bahasa)
+          schema:
+            type: string
+          example: action
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MoviePage'
+
+  /movies/{movieId}:
+    get:
+      tags: [Movies]
+      summary: Detail satu film
+      operationId: getMovie
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/MovieId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Movie'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /movies/{movieId}/shows:
+    get:
+      tags: [Shows]
+      summary: Jadwal tayang film di sebuah kota, dikelompokkan per bioskop
+      operationId: getShowsForMovie
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/MovieId'
+        - name: cityId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CinemaShows'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /shows/{showId}:
+    get:
+      tags: [Shows]
+      summary: Detail satu jadwal tayang (termasuk bioskop & film)
+      operationId: getShow
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ShowId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShowDetail'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /shows/{showId}/seats:
+    get:
+      tags: [Shows]
+      summary: Peta kursi real-time untuk sebuah jadwal
+      description: >
+        Mengembalikan status setiap kursi (AVAILABLE/LOCKED/BOOKED). Status
+        dihitung dari database (BOOKED) dan cache seat-lock (LOCKED, Redis).
+      operationId: getSeatMap
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ShowId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Seat'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /shows/{showId}/locks:
+    post:
+      tags: [Bookings]
+      summary: Kunci kursi secara atomik (seat locking)
+      description: >
+        Mencoba mengunci semua kursi yang diminta untuk sesi pemesanan saat ini.
+        Operasi bersifat all-or-nothing: jika salah satu kursi sudah BOOKED atau
+        LOCKED oleh orang lain, tidak ada kursi yang terkunci (HTTP 409). Lock
+        memiliki TTL (mis. 5 menit) dan otomatis kedaluwarsa — inilah inti
+        penyelesaian tantangan concurrency + consistency.
+      operationId: lockSeats
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LockRequest'
+      parameters:
+        - $ref: '#/components/parameters/ShowId'
+      responses:
+        '201':
+          description: Semua kursi berhasil dikunci
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LockResponse'
+        '409':
+          description: Satu atau lebih kursi sudah diambil
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /shows/{showId}/locks/{lockId}:
+    delete:
+      tags: [Bookings]
+      summary: Lepas kunci kursi (batal sebelum bayar)
+      operationId: releaseLock
+      parameters:
+        - $ref: '#/components/parameters/ShowId'
+        - name: lockId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Lock dilepas
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /bookings:
+    get:
+      tags: [Bookings]
+      summary: Riwayat booking pengguna
+      operationId: listBookings
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Booking'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [Bookings]
+      summary: Konfirmasi booking setelah pembayaran sukses
+      description: >
+        Mempromosikan kursi yang terkunci menjadi BOOKED secara permanen dan
+        menghasilkan e-ticket (QR). Memerlukan lockId yang valid dan paymentId
+        yang sudah SUCCESS dari Payment Service.
+      operationId: confirmBooking
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfirmBookingRequest'
+      responses:
+        '201':
+          description: Booking terkonfirmasi
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+        '402':
+          description: Pembayaran belum berhasil
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Lock sudah kedaluwarsa atau tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /bookings/{bookingId}:
+    get:
+      tags: [Bookings]
+      summary: Detail satu booking
+      operationId: getBooking
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /bookings/{bookingId}/cancel:
+    post:
+      tags: [Bookings]
+      summary: Batalkan booking yang sudah terkonfirmasi
+      operationId: cancelBooking
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Booking dibatalkan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /payments:
+    post:
+      tags: [Payments]
+      summary: Inisiasi pembayaran untuk kursi yang terkunci
+      description: >
+        Membuat intent pembayaran melalui Payment Gateway. Pada implementasi
+        nyata, mengembalikan URL/redirect atau token gateway. Di sini
+        mengembalikan paymentId yang statusnya dapat di-poll.
+      operationId: createPayment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePaymentRequest'
+      responses:
+        '201':
+          description: Pembayaran dibuat
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /payments/{paymentId}:
+    get:
+      tags: [Payments]
+      summary: Cek status pembayaran
+      operationId: getPayment
+      parameters:
+        - name: paymentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  security:
+    - bearerAuth: []
+
+  parameters:
+    MovieId:
+      name: movieId
+      in: path
+      required: true
+      schema:
+        type: string
+      example: m1
+    ShowId:
+      name: showId
+      in: path
+      required: true
+      schema:
+        type: string
+      example: s1
+
+  responses:
+    Unauthorized:
+      description: Token tidak valid atau tidak ada
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Resource tidak ditemukan
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: Konflik (mis. email sudah terdaftar)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          example: SEAT_TAKEN
+        message:
+          type: string
+          example: Salah satu kursi baru saja diambil orang lain.
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+
+    RegisterRequest:
+      type: object
+      required: [name, email, password]
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+
+    AuthResponse:
+      type: object
+      required: [accessToken, tokenType, user]
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        tokenType:
+          type: string
+          example: Bearer
+        expiresIn:
+          type: integer
+          example: 3600
+        user:
+          $ref: '#/components/schemas/User'
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+
+    City:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          example: jkt
+        name:
+          type: string
+          example: Jakarta
+
+    Movie:
+      type: object
+      required: [id, title, genres, language, durationMinutes, rating, synopsis, cast, posterColor, certification]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        genres:
+          type: array
+          items:
+            type: string
+        language:
+          type: string
+        durationMinutes:
+          type: integer
+        rating:
+          type: number
+          format: double
+        synopsis:
+          type: string
+        cast:
+          type: array
+          items:
+            type: string
+        posterUrl:
+          type: string
+          nullable: true
+          description: URL poster dari Object Storage via CDN
+        posterColor:
+          type: string
+          description: Warna fallback poster dalam hex ARGB, mis. "FFE53935"
+          example: FFE53935
+        certification:
+          type: string
+          example: R13+
+
+    MoviePage:
+      type: object
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/Movie'
+        page:
+          type: integer
+        size:
+          type: integer
+        totalElements:
+          type: integer
+
+    Cinema:
+      type: object
+      required: [id, name, cityId, address]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        cityId:
+          type: string
+        address:
+          type: string
+
+    ShowFormat:
+      type: string
+      enum: [TWO_D, THREE_D, IMAX]
+
+    Show:
+      type: object
+      required: [id, movieId, cinemaId, startTime, format, price]
+      properties:
+        id:
+          type: string
+        movieId:
+          type: string
+        cinemaId:
+          type: string
+        startTime:
+          type: string
+          example: "18:00"
+        format:
+          $ref: '#/components/schemas/ShowFormat'
+        price:
+          type: integer
+          description: Harga per kursi (IDR)
+          example: 60000
+
+    ShowDetail:
+      allOf:
+        - $ref: '#/components/schemas/Show'
+        - type: object
+          properties:
+            movie:
+              $ref: '#/components/schemas/Movie'
+            cinema:
+              $ref: '#/components/schemas/Cinema'
+
+    CinemaShows:
+      type: object
+      properties:
+        cinema:
+          $ref: '#/components/schemas/Cinema'
+        shows:
+          type: array
+          items:
+            $ref: '#/components/schemas/Show'
+
+    SeatStatus:
+      type: string
+      enum: [AVAILABLE, LOCKED, BOOKED]
+
+    Seat:
+      type: object
+      required: [id, row, number, status]
+      properties:
+        id:
+          type: string
+          example: A1
+        row:
+          type: string
+          example: A
+        number:
+          type: integer
+          example: 1
+        status:
+          $ref: '#/components/schemas/SeatStatus'
+
+    LockRequest:
+      type: object
+      required: [seatIds]
+      properties:
+        seatIds:
+          type: array
+          items:
+            type: string
+          example: ["A1", "A2"]
+
+    LockResponse:
+      type: object
+      required: [lockId, showId, seatIds, expiresAt]
+      properties:
+        lockId:
+          type: string
+        showId:
+          type: string
+        seatIds:
+          type: array
+          items:
+            type: string
+        expiresAt:
+          type: string
+          format: date-time
+          description: Waktu kedaluwarsa lock (TTL)
+
+    CreatePaymentRequest:
+      type: object
+      required: [lockId, amount, method]
+      properties:
+        lockId:
+          type: string
+        amount:
+          type: integer
+        method:
+          type: string
+          enum: [UPI, CARD, WALLET, QRIS]
+          example: QRIS
+
+    PaymentStatus:
+      type: string
+      enum: [PENDING, SUCCESS, FAILED]
+
+    Payment:
+      type: object
+      required: [id, status, amount]
+      properties:
+        id:
+          type: string
+        status:
+          $ref: '#/components/schemas/PaymentStatus'
+        amount:
+          type: integer
+        redirectUrl:
+          type: string
+          nullable: true
+
+    ConfirmBookingRequest:
+      type: object
+      required: [lockId, paymentId]
+      properties:
+        lockId:
+          type: string
+        paymentId:
+          type: string
+
+    BookingStatus:
+      type: string
+      enum: [CONFIRMED, CANCELLED]
+
+    Booking:
+      type: object
+      required: [id, movieTitle, cinemaName, showTime, format, seatIds, totalPrice, createdAt, status, qrPayload]
+      properties:
+        id:
+          type: string
+          example: TIX-A1B2C3D4
+        movieTitle:
+          type: string
+        cinemaName:
+          type: string
+        showTime:
+          type: string
+        format:
+          $ref: '#/components/schemas/ShowFormat'
+        seatIds:
+          type: array
+          items:
+            type: string
+        totalPrice:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        status:
+          $ref: '#/components/schemas/BookingStatus'
+        qrPayload:
+          type: string
+
+security:
+  - bearerAuth: []

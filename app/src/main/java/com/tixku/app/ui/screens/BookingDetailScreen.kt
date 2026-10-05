@@ -26,6 +26,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,6 +40,7 @@ import com.tixku.app.data.TixkuRepository
 import com.tixku.app.data.label
 import com.tixku.app.util.formatRupiah
 import com.tixku.app.util.generateQrBitmap
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -48,6 +50,7 @@ fun BookingDetailScreen(
     onHome: () -> Unit,
 ) {
     val bookings by TixkuRepository.bookings.collectAsState()
+    val scope = rememberCoroutineScope()
     val booking = bookings.firstOrNull { it.id == bookingId } ?: return
 
     Column(Modifier.fillMaxSize()) {
@@ -112,7 +115,7 @@ fun BookingDetailScreen(
             Spacer(Modifier.height(24.dp))
             if (booking.status == BookingStatus.CONFIRMED) {
                 OutlinedButton(
-                    onClick = { TixkuRepository.cancelBooking(booking.id) },
+                    onClick = { scope.launch { runCatching { TixkuRepository.cancelBooking(booking.id) } } },
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Batalkan Booking") }
                 Spacer(Modifier.height(8.dp))

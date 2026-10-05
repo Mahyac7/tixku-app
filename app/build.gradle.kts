@@ -22,23 +22,33 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Local backend reachable from the Android emulator via 10.0.2.2.
+            buildConfigField("String", "API_BASE_URL", "\"http://10.0.2.2:8080/v1/\"")
+            // Toggle to false to force the offline mock data source.
+            buildConfigField("boolean", "USE_REMOTE_API", "false")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            buildConfigField("String", "API_BASE_URL", "\"https://api.tixku.app/v1/\"")
+            buildConfigField("boolean", "USE_REMOTE_API", "true")
         }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
+        isCoreLibraryDesugaringEnabled = true
     }
     kotlinOptions {
         jvmTarget = "1.8"
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     packaging {
         resources {
@@ -66,8 +76,19 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
+    // Networking: Retrofit + OkHttp + Moshi
+    implementation("com.squareup.retrofit2:retrofit:2.11.0")
+    implementation("com.squareup.retrofit2:converter-moshi:2.11.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
+    implementation("com.squareup.moshi:moshi:1.15.1")
+    implementation("com.squareup.moshi:moshi-kotlin:1.15.1")
+
     // QR code generation
     implementation("com.google.zxing:core:3.5.3")
+
+    // Enables java.time.* APIs on minSdk < 26
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

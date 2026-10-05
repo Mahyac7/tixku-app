@@ -61,8 +61,60 @@ app/src/main/java/com/tixku/app/
 └── util/Util.kt               # Format rupiah + QR generator
 ```
 
+## Integrasi Backend REST
+
+Aplikasi sudah punya **layer network lengkap** (Retrofit + OkHttp + Moshi) yang
+mengikuti kontrak API di [`docs/openapi.yaml`](docs/openapi.yaml) — lihat juga
+ringkasan di [`docs/API.md`](docs/API.md).
+
+Arsitektur data:
+
+```
+UI (Compose)
+   │  memanggil method suspend
+   ▼
+TixkuRepository (facade)
+   │  memilih sumber berdasarkan BuildConfig.USE_REMOTE_API
+   ├── RemoteDataSource ──► Retrofit (TixkuApi) ──► Backend REST / API Gateway
+   └── LocalDataSource  ──► MockData (offline / demo)
+```
+
+- **`USE_REMOTE_API = false`** (default pada build `debug`) → pakai data lokal,
+  app bisa jalan tanpa backend.
+- **`USE_REMOTE_API = true`** (default pada build `release`) → panggil backend
+  REST di `BuildConfig.API_BASE_URL`.
+
+### Mengarahkan ke backend
+Ubah di `app/build.gradle.kts`:
+
+```kotlin
+debug {
+    buildConfigField("String", "API_BASE_URL", "\"http://10.0.2.2:8080/v1/\"")
+    buildConfigField("boolean", "USE_REMOTE_API", "true")
+}
+```
+
+`10.0.2.2` = alias `localhost` mesin host dari emulator Android. Token JWT dari
+Auth Service di-set via `NetworkModule.authToken` dan otomatis dikirim sebagai
+header `Authorization: Bearer <token>`.
+
+### File network
+```
+app/src/main/java/com/tixku/app/data/
+├── TixkuDataSource.kt   # interface + tipe (SeatLock, PaymentResult, ...)
+├── LocalDataSource.kt   # implementasi offline (mock + seat lock TTL)
+├── RemoteDataSource.kt  # implementasi REST (maps 409 -> seat taken, dll.)
+├── TixkuRepository.kt   # facade pemilih sumber + cache bookings
+└── remote/
+    ├── TixkuApi.kt       # Retrofit endpoints
+    ├── Dto.kt            # DTO sesuai openapi.yaml
+    ├── Mappers.kt        # DTO <-> domain
+    └── NetworkModule.kt  # Retrofit/OkHttp + auth interceptor
+```
+
 ## Roadmap (menuju arsitektur penuh)
-- Sambungkan repository ke REST/GraphQL API Gateway sungguhan
-- Autentikasi (OAuth/JWT) via Auth Service
-- Caching lokal dengan Room, offline support
-- Integrasi payment gateway asli (Midtrans/Stripe)
+- Implementasi backend sungguhan sesuai `docs/openapi.yaml` (Spring Boot/NestJS)
+- Simpan JWT secara aman (EncryptedSharedPreferences) + refresh token
+- Caching lokal dengan Room untuk offline-first
+- Integrasi payment gateway asli (Midtrans/Stripe) menggantikan simulasi
+- Live seat updates via WebSocket/SSE (menggantikan polling)

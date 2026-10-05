@@ -30,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,6 +45,7 @@ import com.tixku.app.data.City
 import com.tixku.app.data.Movie
 import com.tixku.app.data.TixkuRepository
 import com.tixku.app.ui.components.MoviePoster
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -54,7 +56,16 @@ fun HomeScreen(
     onMyBookings: () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
-    val movies: List<Movie> = TixkuRepository.searchMovies(city.id, query)
+    var movies by remember { mutableStateOf<List<Movie>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+
+    // Debounced search against the Search Service.
+    LaunchedEffect(city.id, query) {
+        loading = true
+        if (query.isNotBlank()) delay(300) // debounce typing
+        movies = runCatching { TixkuRepository.searchMovies(city.id, query) }.getOrDefault(emptyList())
+        loading = false
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
@@ -101,7 +112,11 @@ fun HomeScreen(
         )
         Spacer(Modifier.height(8.dp))
 
-        if (movies.isEmpty()) {
+        if (loading && movies.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                androidx.compose.material3.CircularProgressIndicator()
+            }
+        } else if (movies.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("Tidak ada film yang cocok.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
             }
