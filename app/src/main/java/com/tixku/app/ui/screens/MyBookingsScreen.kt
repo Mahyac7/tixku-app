@@ -20,6 +20,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -40,6 +41,9 @@ fun MyBookingsScreen(
     onBookingClick: (String) -> Unit,
 ) {
     val bookings by TixkuRepository.bookings.collectAsState()
+
+    // Refresh from the backend (or local store) each time this screen opens.
+    LaunchedEffect(Unit) { runCatching { TixkuRepository.refreshBookings() } }
 
     Column(Modifier.fillMaxSize()) {
         TopAppBar(

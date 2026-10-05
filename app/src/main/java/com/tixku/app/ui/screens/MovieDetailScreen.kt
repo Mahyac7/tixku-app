@@ -36,6 +36,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tixku.app.data.City
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.material3.CircularProgressIndicator
+import com.tixku.app.data.CinemaShows
+import com.tixku.app.data.Movie
 import com.tixku.app.data.TixkuRepository
 import com.tixku.app.data.label
 import com.tixku.app.ui.components.MoviePoster
@@ -49,12 +57,28 @@ fun MovieDetailScreen(
     onBack: () -> Unit,
     onShowSelected: (String) -> Unit,
 ) {
-    val movie = TixkuRepository.getMovie(movieId) ?: return
-    val showsByCinema = TixkuRepository.getShowsForMovie(movieId, city.id)
+    var movie by remember { mutableStateOf<Movie?>(null) }
+    var showsByCinema by remember { mutableStateOf<List<CinemaShows>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+
+    LaunchedEffect(movieId, city.id) {
+        loading = true
+        movie = runCatching { TixkuRepository.getMovie(movieId) }.getOrNull()
+        showsByCinema = runCatching { TixkuRepository.getShowsForMovie(movieId, city.id) }.getOrDefault(emptyList())
+        loading = false
+    }
+
+    val movieData = movie
+    if (movieData == null) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            if (loading) CircularProgressIndicator() else Text("Film tidak ditemukan.")
+        }
+        return
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text(movie.title, maxLines = 1) },
+            title = { Text(movieData.title, maxLines = 1) },
             navigationIcon = {
                 IconButton(onClick = onBack) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, "Kembali")
@@ -69,35 +93,35 @@ fun MovieDetailScreen(
         ) {
             Row {
                 MoviePoster(
-                    title = movie.title,
-                    posterColor = movie.posterColor,
+                    title = movieData.title,
+                    posterColor = movieData.posterColor,
                     modifier = Modifier
                         .width(120.dp)
                         .height(170.dp),
                 )
                 Spacer(Modifier.width(16.dp))
                 Column {
-                    Text(movie.title, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                    Text(movieData.title, fontWeight = FontWeight.Bold, fontSize = 20.sp)
                     Spacer(Modifier.height(4.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Filled.Star, null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(16.dp))
-                        Text(" ${movie.rating} / 10", fontWeight = FontWeight.SemiBold)
+                        Text(" ${movieData.rating} / 10", fontWeight = FontWeight.SemiBold)
                     }
                     Spacer(Modifier.height(4.dp))
-                    Text("${movie.durationMinutes} menit • ${movie.language}", fontSize = 13.sp)
-                    Text("Rating usia: ${movie.certification}", fontSize = 13.sp)
+                    Text("${movieData.durationMinutes} menit • ${movieData.language}", fontSize = 13.sp)
+                    Text("Rating usia: ${movieData.certification}", fontSize = 13.sp)
                     Spacer(Modifier.height(8.dp))
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        movie.genres.forEach { g -> Chip(g) }
+                        movieData.genres.forEach { g -> Chip(g) }
                     }
                 }
             }
 
             Spacer(Modifier.height(16.dp))
             Text("Sinopsis", fontWeight = FontWeight.Bold)
-            Text(movie.synopsis, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f))
+            Text(movieData.synopsis, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f))
             Spacer(Modifier.height(8.dp))
-            Text("Pemain: ${movie.cast.joinToString(", ")}", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+            Text("Pemain: ${movieData.cast.joinToString(", ")}", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
 
             Spacer(Modifier.height(20.dp))
             Text("Jadwal Tayang di ${city.name}", fontWeight = FontWeight.Bold, fontSize = 18.sp)

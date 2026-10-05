@@ -38,11 +38,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.tixku.app.data.Seat
+import com.tixku.app.data.SeatLock
 import com.tixku.app.data.SeatStatus
+import com.tixku.app.data.ShowDetail
 import com.tixku.app.data.TixkuRepository
 import com.tixku.app.data.label
 import com.tixku.app.util.formatRupiah
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -52,19 +54,38 @@ fun SeatSelectionScreen(
     onBack: () -> Unit,
     onBookingConfirmed: (String) -> Unit,
 ) {
-    val show = TixkuRepository.getShow(showId) ?: return
-    val movie = TixkuRepository.getMovie(show.movieId) ?: return
-    val cinema = TixkuRepository.getCinema(show.cinemaId) ?: return
-
+    var detail by remember { mutableStateOf<ShowDetail?>(null) }
     var selected by remember { mutableStateOf(setOf<String>()) }
-    // Recompute the seat map whenever selection changes; selected seats render as held-by-me.
-    val seats = remember(selected) { TixkuRepository.getSeatMap(showId, selected) }
-
+    var seats by remember { mutableStateOf<List<Seat>>(emptyList()) }
     var showPaymentDialog by remember { mutableStateOf(false) }
     var processing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var activeLock by remember { mutableStateOf<SeatLock?>(null) }
     val scope = rememberCoroutineScope()
 
+    // Load show details once.
+    androidx.compose.runtime.LaunchedEffect(showId) {
+        detail = runCatching { TixkuRepository.getShow(showId) }.getOrNull()
+    }
+
+    // Refresh the seat map whenever the selection changes (held-by-me rendering)
+    // or the show loads. In a real app this would also poll for live updates.
+    androidx.compose.runtime.LaunchedEffect(showId, selected, detail) {
+        if (detail != null) {
+            seats = runCatching { TixkuRepository.getSeatMap(showId, selected) }.getOrDefault(emptyList())
+        }
+    }
+
+    val currentDetail = detail
+    if (currentDetail == null) {
+        Box(Modifier.fillMaxWidth().height(300.dp), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+        return
+    }
+    val show = currentDetail.show
+    val movie = currentDetail.movie
+    val cinema = currentDetail.cinema
     val total = show.price * selected.size
 
     Column(Modifier.fillMaxWidth()) {
@@ -168,15 +189,19 @@ fun SeatSelectionScreen(
             Button(
                 onClick = {
                     // Booking Service: atomically lock seats before payment.
-                    val locked = TixkuRepository.lockSeats(showId, selected)
-                    if (locked) {
-                        showPaymentDialog = true
-                    } else {
-                        errorMessage = "Maaf, salah satu kursi baru saja diambil orang lain. Silakan pilih kursi lain."
-                        selected = emptySet()
+                    scope.launch {
+                        val lock = runCatching { TixkuRepository.lockSeats(showId, selected) }
+                            .getOrNull()
+                        if (lock != null) {
+                            activeLock = lock
+                            showPaymentDialog = true
+                        } else {
+                            errorMessage = "Maaf, salah satu kursi baru saja diambil orang lain. Silakan pilih kursi lain."
+                            selected = emptySet()
+                        }
                     }
                 },
-                enabled = selected.isNotEmpty(),
+                enabled = selected.isNotEmpty() && !processing,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text("Kunci Kursi & Bayar")
@@ -189,7 +214,9 @@ fun SeatSelectionScreen(
         AlertDialog(
             onDismissRequest = {
                 if (!processing) {
-                    TixkuRepository.releaseSeats(showId, selected)
+                    val lock = activeLock
+                    scope.launch { if (lock != null) TixkuRepository.releaseLock(showId, lock) }
+                    activeLock = null
                     showPaymentDialog = false
                 }
             },
@@ -222,12 +249,19 @@ fun SeatSelectionScreen(
                 TextButton(
                     enabled = !processing,
                     onClick = {
+                        val lock = activeLock ?: return@TextButton
                         processing = true
                         scope.launch {
-                            delay(1200) // simulate payment gateway round-trip
-                            val booking = TixkuRepository.confirmBooking(showId, selected, paymentSuccess = true)
+                            // Payment Service: create intent, then confirm the booking.
+                            val payment = runCatching {
+                                TixkuRepository.createPayment(lock, total, method = "QRIS")
+                            }.getOrNull()
+                            val booking = if (payment != null) {
+                                runCatching { TixkuRepository.confirmBooking(showId, lock, payment) }.getOrNull()
+                            } else null
                             processing = false
                             showPaymentDialog = false
+                            activeLock = null
                             if (booking != null) {
                                 onBookingConfirmed(booking.id)
                             } else {
@@ -242,7 +276,9 @@ fun SeatSelectionScreen(
                 TextButton(
                     enabled = !processing,
                     onClick = {
-                        TixkuRepository.releaseSeats(showId, selected)
+                        val lock = activeLock
+                        scope.launch { if (lock != null) TixkuRepository.releaseLock(showId, lock) }
+                        activeLock = null
                         showPaymentDialog = false
                     },
                 ) { Text("Batal") }
